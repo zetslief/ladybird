@@ -253,17 +253,26 @@ JS::ThrowCompletionOr<ResolvedOverload> resolve_overload(JS::VM& vm, IDL::Effect
             overloads.remove_all_other_entries();
         }
 
-        // FIXME: 9. Otherwise: if Type(V) is Object and there is an entry in S that has one of the following types at position i of its type list,
+        // 9. Otherwise: if Type(V) is Object and there is an entry in S that has one of the following types at position i of its type list,
         //    - a sequence type
-        //    - a frozen array type
-        //    - a nullable version of any of the above types
-        //    - an annotated type whose inner type is one of the above types
-        //    - a union type, nullable union type, or annotated union type that has one of the above types in its flattened member types
+        //    - a nullable sequence type
+        //    FIXME - an annotated type whose inner type is a sequence type
+        //    FIXME - a union type, nullable union type, or annotated union type that has one of the above types in its flattened member types
         //    and after performing the following steps,
         //    {
         //        1. Let method be ? GetMethod(V, @@iterator).
         //    }
         //    method is not undefined, then remove from S all other entries.
+        else if (value.is_object()
+            && has_overload_with_argument_type_or_subtype_matching(overloads, i, [&vm, &value](IDL::Type const& type) {
+                    if (type.is_sequence()) {
+                        auto method = value.get_method(vm, vm.well_known_symbol_iterator());
+                        return method.has_value() && method.value();
+                    }
+                    return false;
+                })) {
+            overloads.remove_all_other_entries();
+        }
 
         // 10. Otherwise: if Type(V) is Object and there is an entry in S that has one of the following types at position i of its type list,
         //     - a callback interface type

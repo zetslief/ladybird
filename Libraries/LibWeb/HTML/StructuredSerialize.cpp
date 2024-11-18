@@ -16,6 +16,7 @@
 #include <LibJS/Forward.h>
 #include <LibJS/Runtime/Array.h>
 #include <LibJS/Runtime/ArrayBuffer.h>
+#include <LibJS/Runtime/ArrayBufferConstructor.h>
 #include <LibJS/Runtime/BigInt.h>
 #include <LibJS/Runtime/BigIntObject.h>
 #include <LibJS/Runtime/BooleanObject.h>
@@ -1113,12 +1114,15 @@ WebIDL::ExceptionOr<SerializedTransferRecord> structured_serialize_with_transfer
     for (auto const& transferable : transfer_list) {
 
         // 1. If transferable has neither an [[ArrayBufferData]] internal slot nor a [[Detached]] internal slot, then throw a "DataCloneError" DOMException.
-        // FIXME: Handle transferring ArrayBufferData objects
-        if (!is<Bindings::Transferable>(*transferable)) {
+        auto is_array_buffer = value.is_object() && is<JS::ArrayBuffer>(value.as_object());
+        if (!is_array_buffer && !is<Bindings::Transferable>(*transferable)) {
             return WebIDL::DataCloneError::create(*vm.current_realm(), "Cannot transfer type"_string);
         }
 
-        // FIXME: 2. If transferable has an [[ArrayBufferData]] internal slot and IsSharedArrayBuffer(transferable) is true, then throw a "DataCloneError" DOMException.
+        // 2. If transferable has an [[ArrayBufferData]] internal slot and IsSharedArrayBuffer(transferable) is true, then throw a "DataCloneError" DOMException.
+        if (is_array_buffer && verify_cast<JS::ArrayBuffer>(value.as_object()).is_shared_array_buffer()) {
+            return WebIDL::DataCloneError::create(*vm.current_realm(), "Cannot transfer shared array buffer"_string);
+        }
 
         // 3. If memory[transferable] exists, then throw a "DataCloneError" DOMException.
         auto transferable_value = JS::Value(transferable);
@@ -1127,7 +1131,8 @@ WebIDL::ExceptionOr<SerializedTransferRecord> structured_serialize_with_transfer
         }
 
         // 4. Set memory[transferable] to { [[Type]]: an uninitialized value }.
-        memory.set(GC::make_root(transferable_value), NumericLimits<u32>::max());
+        memory.set(GC::make_root(transferable_value), memory.size());
+        //memory.set(GC::make_root(transferable_value), NumericLimits<u32>::max());
     }
 
     // 3. Let serialized be ? StructuredSerializeInternal(value, false, memory).
@@ -1139,7 +1144,12 @@ WebIDL::ExceptionOr<SerializedTransferRecord> structured_serialize_with_transfer
 
     // 5. For each transferable of transferList:
     for (auto& transferable : transfer_list) {
-        // 1. FIXME: If transferable has an [[ArrayBufferData]] internal slot and IsDetachedBuffer(transferable) is true, then throw a "DataCloneError" DOMException.
+        auto is_array_buffer = value.is_object() && is<JS::ArrayBuffer>(value.as_object());
+        auto is_detached = is_array_buffer && verify_cast<JS::ArrayBuffer>(value.as_object()).is_detached();
+        // 1. If transferable has an [[ArrayBufferData]] internal slot and IsDetachedBuffer(transferable) is true, then throw a "DataCloneError" DOMException.
+        if (is_detached) {
+            return WebIDL::DataCloneError::create(*vm.current_realm(), "Cannot transfer detached buffer"_string);
+        }
 
         // 2. If transferable has a [[Detached]] internal slot and transferable.[[Detached]] is true, then throw a "DataCloneError" DOMException.
         if (is<Bindings::Transferable>(*transferable)) {
@@ -1153,8 +1163,42 @@ WebIDL::ExceptionOr<SerializedTransferRecord> structured_serialize_with_transfer
         // IMPLEMENTATION DEFINED: We just create a data holder here, our memory holds indices into the SerializationRecord
         TransferDataHolder data_holder;
 
-        // FIXME 4. If transferable has an [[ArrayBufferData]] internal slot, then:
-        if (false) {
+        // 4. If transferable has an [[ArrayBufferData]] internal slot, then:
+        if (is_array_buffer) {
+            // 1. If transferable has an [[ArrayBufferMaxByteLength]] internal slot, then:
+            auto& array_buffer = verify_cast<JS::ArrayBuffer>(value.as_object());
+            if (!array_buffer.is_fixed_length()) {
+                // 1. Set dataHolder.[[Type]] to "ResizableArrayBuffer".
+                data_holder.data.append(to_underlying(TransferType::ResizableArrayBuffer));
+
+                // 3. Set dataHolder.[[ArrayBufferByteLength]] to transferable.[[ArrayBufferByteLength]].
+                size_t byte_length = array_buffer.byte_length(); 
+                data_holder.data.append((u8*)&byte_length, sizeof(size_t));
+
+                // 4. Set dataHolder.[[ArrayBufferMaxByteLength]] to transferable.[[ArrayBufferMaxByteLength]].
+                size_t max_byte_length = array_buffer.max_byte_length(); 
+                data_holder.data.append((u8*)&max_byte_length, sizeof(size_t));
+
+                // 2. Set dataHolder.[[ArrayBufferData]] to transferable.[[ArrayBufferData]].
+                data_holder.data.append(array_buffer.buffer().data(), array_buffer.buffer().size());
+            }
+
+            // 2. Otherwise:
+            else {
+                // 1. Set dataHolder.[[Type]] to "ArrayBuffer".
+                data_holder.data.append(to_underlying(TransferType::ArrayBuffer));
+
+                // 3. Set dataHolder.[[ArrayBufferByteLength]] to transferable.[[ArrayBufferByteLength]].
+                size_t byte_length = array_buffer.byte_length(); 
+
+                // 2. Set dataHolder.[[ArrayBufferData]] to transferable.[[ArrayBufferData]].
+                data_holder.data.append((u8*)&byte_length, sizeof(size_t));
+                data_holder.data.append(array_buffer.buffer().data(), array_buffer.buffer().size());
+            }
+
+            // 3. Perform ? DetachArrayBuffer(transferable).
+            // NOTE: Specifications can use the [[ArrayBufferDetachKey]] internal slot to prevent ArrayBuffers from being detached. This is used in WebAssembly JavaScript Interface, for example. See: https://html.spec.whatwg.org/multipage/references.html#refsWASMJS
+            MUST(JS::detach_array_buffer(vm, array_buffer));
         }
 
         // 5. Otherwise:
@@ -1206,6 +1250,9 @@ static WebIDL::ExceptionOr<GC::Ref<Bindings::PlatformObject>> create_transferred
         TRY(message_port->transfer_receiving_steps(transfer_data_holder));
         return message_port;
     }
+    default:
+        dbgln("Unknown interface type to create transfered value: {}", to_underlying(name));
+        break;
     }
     VERIFY_NOT_REACHED();
 }
@@ -1226,6 +1273,8 @@ WebIDL::ExceptionOr<DeserializedTransferRecord> structured_deserialize_with_tran
         // 1. Let value be an uninitialized value.
         JS::Value value;
 
+        u8 const type = transfer_data_holder.data.take_first();
+
         // FIXME: 2. If transferDataHolder.[[Type]] is "ArrayBuffer", then set value to a new ArrayBuffer object in targetRealm
         //    whose [[ArrayBufferData]] internal slot value is transferDataHolder.[[ArrayBufferData]], and
         //    whose [[ArrayBufferByteLength]] internal slot value is transferDataHolder.[[ArrayBufferByteLength]].
@@ -1233,21 +1282,61 @@ WebIDL::ExceptionOr<DeserializedTransferRecord> structured_deserialize_with_tran
         //       this step is unlikely to throw an exception, as no new memory needs to be allocated: the memory occupied by
         //       [[ArrayBufferData]] is instead just getting transferred into the new ArrayBuffer. This could be true, for example,
         //       when both the source and target realms are in the same process.
-        if (false) {
+        // TODO (ksenkevich): figure out how to convert u8 to enum :)
+        if (type == to_underlying(TransferType::ArrayBuffer)) {
+            // TODO (ksenkevich): consider Checked<size_t). See TypedArray.cpp as an example.
+            size_t byte_length = 0; 
+            for (size_t i = 0; i < sizeof(size_t) / sizeof(u8); ++i) {
+                ASSERT(transfer_data_holder.data.size() > 0);
+                byte_length |= transfer_data_holder.data.take_first() << i;
+            }
+
+            JS::ArrayBuffer* data = TRY(JS::allocate_array_buffer(vm, target_realm.intrinsics().array_buffer_constructor(), byte_length));
+            auto source = transfer_data_holder.data.span();
+            auto dest = data->buffer().span();
+            dbgln("Copy spans...");
+            for (size_t i = 0; i < source.size() && dest.size(); ++i) {
+                dbgln("Index: {}", i);
+                dest[i] = source[i];
+            } 
+            dbgln("Done!");
+            value = data;
+            dbgln("Value: {}", value.as_object().class_name());
         }
 
-        // FIXME: 3. Otherwise, if transferDataHolder.[[Type]] is "ResizableArrayBuffer", then set value to a new ArrayBuffer object
+        // 3. Otherwise, if transferDataHolder.[[Type]] is "ResizableArrayBuffer", then set value to a new ArrayBuffer object
         //     in targetRealm whose [[ArrayBufferData]] internal slot value is transferDataHolder.[[ArrayBufferData]], whose
         //     [[ArrayBufferByteLength]] internal slot value is transferDataHolder.[[ArrayBufferByteLength]], and whose
         //     [[ArrayBufferMaxByteLength]] internal slot value is transferDataHolder.[[ArrayBufferMaxByteLength]].
         // NOTE: For the same reason as the previous step, this step is also unlikely to throw an exception.
-        else if (false) {
+        else if (type == to_underlying(TransferType::ResizableArrayBuffer)) {
+            // TODO (ksenkevich): consider Checked<size_t>. See TypedArray.cpp as an example.
+            size_t byte_length = 0; 
+            for (size_t i = 0; i < sizeof(size_t) / sizeof(u8); ++i) {
+                ASSERT(transfer_data_holder.data.size() > 0);
+                byte_length |= transfer_data_holder.data.take_first() << i;
+            }
+
+            size_t max_byte_length = 0; 
+            for (size_t i = 0; i < sizeof(size_t) / sizeof(u8); ++i) {
+                ASSERT(transfer_data_holder.data.size() > 0);
+                max_byte_length |= transfer_data_holder.data.take_first() << i;
+            }
+
+            JS::ArrayBuffer* data = TRY(JS::allocate_array_buffer(vm, target_realm.intrinsics().array_buffer_constructor(), byte_length));
+            data->set_max_byte_length(max_byte_length);
+            auto source = transfer_data_holder.data.span();
+            auto dest = data->buffer().span();
+            for (size_t i = 0; i < source.size() && dest.size(); ++i) {
+                dest[i] = source[i];
+            } 
+            value = data;
         }
 
         // 4. Otherwise:
         else {
             // 1. Let interfaceName be transferDataHolder.[[Type]].
-            u8 const interface_name = transfer_data_holder.data.take_first();
+            u8 const interface_name = type;
 
             // 2. If the interface identified by interfaceName is not exposed in targetRealm, then throw a "DataCloneError" DOMException.
             if (!is_interface_exposed_on_target_realm(interface_name, target_realm))

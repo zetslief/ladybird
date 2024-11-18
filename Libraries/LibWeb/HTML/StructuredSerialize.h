@@ -48,6 +48,8 @@ struct DeserializedRecord {
 
 enum class TransferType : u8 {
     MessagePort,
+    ArrayBuffer,
+    ResizableArrayBuffer,
 };
 
 WebIDL::ExceptionOr<SerializationRecord> structured_serialize(JS::VM& vm, JS::Value);

@@ -1,0 +1,23 @@
+<script src="../include.js"></script>
+<script>
+    asyncTest(done => {
+        let channel = new MessageChannel();
+
+        channel.port1.onmessage = (event) => {
+            println("Port1 received " + event.data.byteLength + " of data"); 
+            const array = new Int32Array(event.data);
+            println("Final array: " + JSON.stringify(array));
+        };
+
+        channel.port2.onmessage = (event) => {
+            println("Port2 received " + event.data.byteLength + " of data"); 
+            channel.port2.postMessage(event.data, [event.data]);
+        };
+
+        // FIXME: These should be output in the order: Port1: A, Port2: A, Port1: B, Port2: B, ...
+        const array = new Int32Array([1, 2, 3]);
+        channel.port1.start();
+        channel.port1.postMessage(array.buffer, [array.buffer]);
+        println('Buffer length after transfer: ' + array.buffer.byteLength);
+    });
+</script>

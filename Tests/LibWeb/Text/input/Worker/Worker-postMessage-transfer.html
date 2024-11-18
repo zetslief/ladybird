@@ -4,6 +4,7 @@
         const workerScript = `
             self.onmessage = function(evt) {
                 const receivedBuffer = evt.data;
+                console.log('Received in worker event with data: ', evt.data);
                 self.postMessage(receivedBuffer, [receivedBuffer]);
             };
         `;
@@ -25,5 +26,6 @@
         const myBuf = message.buffer;
 
         worker.postMessage(myBuf, [myBuf]);
+        println('Buffer length after transfer: ' + myBuf.byteLength);
     });
 </script>
