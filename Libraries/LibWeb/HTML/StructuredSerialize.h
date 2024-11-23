@@ -27,7 +27,7 @@ using SerializationMemory = HashMap<GC::Root<JS::Value>, u32>;
 using DeserializationMemory = GC::MarkedVector<JS::Value>;
 
 struct TransferDataHolder {
-    Vector<u8> data;
+    Vector<u32> data;
     Vector<IPC::File> fds;
 };
 
