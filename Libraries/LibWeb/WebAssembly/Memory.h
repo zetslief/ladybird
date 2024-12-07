@@ -20,6 +20,7 @@ namespace Web::WebAssembly {
 struct MemoryDescriptor {
     u32 initial { 0 };
     Optional<u32> maximum;
+    Optional<bool> shared;
 };
 
 class Memory : public Bindings::PlatformObject {
@@ -35,15 +36,16 @@ public:
     Wasm::MemoryAddress address() const { return m_address; }
 
 private:
-    Memory(JS::Realm&, Wasm::MemoryAddress);
+    Memory(JS::Realm&, Wasm::MemoryAddress, bool shared);
 
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Visitor&) override;
 
     WebIDL::ExceptionOr<void> reset_the_memory_buffer();
-    static WebIDL::ExceptionOr<GC::Ref<JS::ArrayBuffer>> create_a_memory_buffer(JS::VM&, JS::Realm&, Wasm::MemoryAddress);
+    static WebIDL::ExceptionOr<GC::Ref<JS::ArrayBuffer>> create_a_fix_length_memory_buffer(JS::VM&, JS::Realm&, Wasm::MemoryAddress, bool shared);
 
     Wasm::MemoryAddress m_address;
+    bool m_shared { false };
     mutable GC::Ptr<JS::ArrayBuffer> m_buffer;
 };
 

@@ -59,7 +59,8 @@ void Instance::initialize(JS::Realm& realm)
             [&](Wasm::MemoryAddress const& address) {
                 Optional<GC::Ptr<Memory>> object = m_memory_instances.get(address);
                 if (!object.has_value()) {
-                    object = realm.create<Memory>(realm, address);
+                    // FIXME: consider an option to initialize shared memory.
+                    object = realm.create<Memory>(realm, address, false);
                     m_memory_instances.set(address, *object);
                 }
 
